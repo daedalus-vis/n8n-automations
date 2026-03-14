@@ -12,16 +12,6 @@ This repository contains workflow definitions that can be imported directly into
 
 Automated daily aggregation of UK track day availability from No Limits Track Days. Monitors 10 racing circuits, validates event data, and sends a formatted HTML email digest with availability alerts.
 
-**Features:**
-
-- Daily scheduled checks across multiple UK circuits
-- Data validation and error handling
-- Mobile-responsive email reports
-- Limited availability alerts
-- Direct booking links
-
-[View workflow documentation →](./workflows/nolimits-track-days-aggregator/README.md)
-
 ## Getting Started
 
 ### Prerequisites
@@ -40,12 +30,14 @@ Automated daily aggregation of UK track day availability from No Limits Track Da
 
 ## Structure
 
+```
 n8n-automations/
 ├── workflows/
 │ └── [workflow-name]/
 │ ├── README.md # Workflow documentation
 │ └── [workflow-name].json # n8n workflow definition
 └── README.md # This file
+```
 
 ## Notes
 
