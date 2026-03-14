@@ -1,0 +1,189 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Centralized Configuration Node\n// All workflow settings are defined here for easy maintenance\n\nconst config = {\n  // API Configuration\n  api: {\n    endpoints: [\n      { id: '659', name: 'Brands Hatch' },\n      { id: '660', name: 'Cadwell Park' },\n      { id: '8034', name: 'Croft' },\n      { id: '44', name: 'Donington Park' },\n      { id: '39', name: 'Oulton Park' },\n      { id: '8035', name: 'Silverstone' },\n      { id: '2225', name: 'Snetterton' },\n      { id: '657', name: 'Thruxton' },\n      { id: '658', name: 'Mallory Park' },\n      { id: '8033', name: 'Rockingham' }\n    ],\n    baseUrl: 'https://www.nolimitstrackdays.com',\n    timeout: 15000,\n    retryAttempts: 3,\n    retryDelay: 2000\n  },\n  \n  // Business Logic Configuration\n  thresholds: {\n    limitedSpaces: 10,\n    criticalSpaces: 5\n  },\n  \n  // Email Configuration\n  email: {\n    styles: {\n      primaryColor: '#3498db',\n      secondaryColor: '#2c3e50',\n      successColor: '#27ae60',\n      warningColor: '#f39c12',\n      dangerColor: '#cc0000',\n      lightBg: '#ecf0f1',\n      darkBg: '#34495e'\n    },\n    dateFormat: {\n      locale: 'en-GB',\n      options: {\n        weekday: 'long',\n        year: 'numeric',\n        month: 'short',\n        day: 'numeric'\n      }\n    }\n  },\n  \n  // Feature Flags\n  features: {\n    includeSummaryStats: true,\n    includeBookingLinks: true,\n    sortChronologically: true,\n    highlightLimitedSpaces: true,\n    mobileResponsive: true\n  },\n  \n  // Validation Rules\n  validation: {\n    requiredFields: ['price', 'track', 'qty', 'url_key', 'description', 'date', 'group_value'],\n    minPrice: 0,\n    maxPrice: 10000\n  }\n};\n\nreturn [{ json: { config } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [624, -16],
+      "id": "6ace4083-a731-455f-b365-81788d443865",
+      "name": "Configuration"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate API Response Node\n// Ensures data quality before aggregation\n\ntry {\n  const config = $('Configuration').item.json.config;\n  const items = $input.all();\n  const validatedItems = [];\n  const errors = [];\n  \n  items.forEach((item, index) => {\n    const data = item.json;\n    \n    // Check if response exists\n    if (!data) {\n      errors.push(`Item ${index}: No data received`);\n      return;\n    }\n    \n    // Check for track_days object\n    if (!data.track_days || typeof data.track_days !== 'object') {\n      // Empty response is valid (no events for this track)\n      validatedItems.push({\n        json: {\n          ...data,\n          track_days: {},\n          validated: true,\n          isEmpty: true\n        }\n      });\n      return;\n    }\n    \n    // Validate each event in track_days\n    const trackDays = data.track_days;\n    const validatedTrackDays = {};\n    \n    Object.keys(trackDays).forEach(key => {\n      const event = trackDays[key];\n      const missingFields = [];\n      \n      // Check required fields\n      config.validation.requiredFields.forEach(field => {\n        if (event[field] === undefined || event[field] === null) {\n          missingFields.push(field);\n        }\n      });\n      \n      if (missingFields.length > 0) {\n        errors.push(`Event ${key}: Missing fields: ${missingFields.join(', ')}`);\n        return;\n      }\n      \n      // Validate price range\n      const price = Number(event.price);\n      if (isNaN(price) || price < config.validation.minPrice || price > config.validation.maxPrice) {\n        errors.push(`Event ${key}: Invalid price: ${event.price}`);\n        return;\n      }\n      \n      // Validate date format\n      const eventDate = new Date(event.date);\n      if (isNaN(eventDate.getTime())) {\n        errors.push(`Event ${key}: Invalid date: ${event.date}`);\n        return;\n      }\n      \n      // Validate quantity\n      const qty = Number(event.qty);\n      if (isNaN(qty) || qty < 0) {\n        errors.push(`Event ${key}: Invalid quantity: ${event.qty}`);\n        return;\n      }\n      \n      // Event passed validation\n      validatedTrackDays[key] = event;\n    });\n    \n    validatedItems.push({\n      json: {\n        ...data,\n        track_days: validatedTrackDays,\n        validated: true,\n        isEmpty: Object.keys(validatedTrackDays).length === 0\n      }\n    });\n  });\n  \n  // Log validation results\n  console.log(`Validation complete: ${validatedItems.length} items validated`);\n  if (errors.length > 0) {\n    console.warn(`Validation warnings (${errors.length}):`, errors);\n  }\n  \n  return validatedItems;\n  \n} catch (error) {\n  console.error('Error in Validate API Response:', error.message);\n  throw new Error(`API response validation failed: ${error.message}`);\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1296, -16],
+      "id": "ac58902a-e2b6-49e4-a7a8-5954631b809b",
+      "name": "Validate API Response"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [400, -16],
+      "id": "d44dd678-e75b-4c85-830c-64f5a889d168",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define Events API Endpoints (Enhanced)\n// Uses configuration from the Configuration node\n\ntry {\n  const config = $('Configuration').item.json.config;\n  \n  if (!config || !config.api || !config.api.endpoints) {\n    throw new Error('Configuration node not found or invalid');\n  }\n  \n  const { endpoints, baseUrl } = config.api;\n  \n  // Build URLs from configuration\n  const urls = endpoints.map(endpoint => ({\n    json: {\n      url: `${baseUrl}/tracks/api/get?product_id=${endpoint.id}`,\n      trackName: endpoint.name,\n      productId: endpoint.id\n    }\n  }));\n  \n  console.log(`Generated ${urls.length} API endpoints`);\n  \n  return urls;\n  \n} catch (error) {\n  console.error('Error in Define Events API Endpoints:', error.message);\n  throw new Error(`Failed to define API endpoints: ${error.message}`);\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [848, -16],
+      "id": "fee69142-fdc3-462c-9a51-4278c5c74b6e",
+      "name": "Define Events API Endpoints"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1072, -16],
+      "id": "7349c5cb-f715-49c3-a6c6-02d430419ce3",
+      "name": "Fetch Events Data",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate Events Data (Enhanced)\n// Improved with error handling, validation, and chronological sorting\n\ntry {\n  const config = $('Configuration').item.json.config;\n  const LIMITED_SPACES_THRESHOLD = config.thresholds.limitedSpaces;\n  const CRITICAL_SPACES_THRESHOLD = config.thresholds.criticalSpaces;\n  \n  const eventsData = {};\n  const data = $input.all().map(item => item.json.track_days ?? {});\n  \n  // Statistics tracking\n  let totalEvents = 0;\n  let limitedSpacesCount = 0;\n  let criticalSpacesCount = 0;\n  const trackCount = {};\n  \n  // Parse all events\n  data.forEach(track => {\n    if (!Object.keys(track).length) return;\n    \n    const events = [];\n    \n    Object.keys(track).forEach(key => {\n      try {\n        const trackEvent = track[key];\n        \n        // Parse and validate event data\n        const price = Number(trackEvent.price);\n        const spaces = Number(trackEvent.qty);\n        const eventDate = new Date(trackEvent.date);\n        \n        if (isNaN(price) || isNaN(spaces) || isNaN(eventDate.getTime())) {\n          console.warn(`Skipping invalid event: ${key}`);\n          return;\n        }\n        \n        // Check if spaces are limited\n        const limitedSpaces = spaces < LIMITED_SPACES_THRESHOLD;\n        const criticalSpaces = spaces < CRITICAL_SPACES_THRESHOLD;\n        \n        // Update statistics\n        totalEvents++;\n        if (limitedSpaces) limitedSpacesCount++;\n        if (criticalSpaces) criticalSpacesCount++;\n        \n        // Clean description (remove HTML tags and line breaks)\n        const description = trackEvent.description\n          .replace(/<[^>]*>/g, '')\n          .replace(/[\\r\\n]/g, '')\n          .trim();\n        \n        // Format friendly date\n        const dateFriendly = eventDate.toLocaleDateString(\n          config.email.dateFormat.locale,\n          config.email.dateFormat.options\n        );\n        \n        // Build booking URL\n        const bookingUrl = `${config.api.baseUrl}/uk-tracks/${trackEvent.url_key}.html`;\n        \n        const newEvent = {\n          price: price.toFixed(2),\n          track: trackEvent.track_value,\n          spaces: spaces.toFixed(0),\n          limitedSpaces: limitedSpaces,\n          criticalSpaces: criticalSpaces,\n          bookingUrl: bookingUrl,\n          description: description,\n          date: trackEvent.date,\n          dateFriendly: dateFriendly,\n          dateObject: eventDate,\n          group: trackEvent.group_value\n        };\n        \n        events.push(newEvent);\n        \n        // Track statistics by track name\n        if (!trackCount[trackEvent.track_value]) {\n          trackCount[trackEvent.track_value] = 0;\n        }\n        trackCount[trackEvent.track_value]++;\n        \n      } catch (error) {\n        console.error(`Error processing event ${key}:`, error.message);\n      }\n    });\n    \n    if (events.length === 0) return;\n    \n    // Sort events chronologically if feature is enabled\n    if (config.features.sortChronologically) {\n      events.sort((a, b) => a.dateObject - b.dateObject);\n    }\n    \n    // Group events by date\n    const eventsByDate = {};\n    \n    events.forEach(event => {\n      const date = event.date;\n      \n      if (!eventsByDate[date]) {\n        eventsByDate[date] = [];\n      }\n      \n      eventsByDate[date].push(event);\n    });\n    \n    // Store events for this track\n    const trackName = events[0].track;\n    eventsData[trackName] = eventsByDate;\n  });\n  \n  // Add summary statistics\n  const summary = {\n    totalEvents: totalEvents,\n    totalTracks: Object.keys(eventsData).length,\n    limitedSpacesCount: limitedSpacesCount,\n    criticalSpacesCount: criticalSpacesCount,\n    trackBreakdown: trackCount,\n    generatedAt: new Date().toISOString()\n  };\n  \n  console.log('Aggregation complete:', summary);\n  \n  // Return in proper array format as requested\n  return [{\n    json: {\n      eventsData: eventsData,\n      summary: summary\n    }\n  }];\n  \n} catch (error) {\n  console.error('Error in Aggregate Events Data:', error.message);\n  throw new Error(`Event aggregation failed: ${error.message}`);\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, -16],
+      "id": "3044d237-86aa-405c-b087-6a687bd860cb",
+      "name": "Aggregate Events Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate HTML Email (Enhanced)\n// Mobile-responsive with summary statistics and booking links\n// Fixed to work with pinned data - no external node references\n\ntry {\n  // Get input data without using .first() or .item() methods\n  const items = $input.all();\n  \n  if (!items || items.length === 0) {\n    throw new Error('No input data received');\n  }\n  \n  const item = items[0].json;\n  const eventsData = item.eventsData;\n  const summary = item.summary;\n  \n  // Hardcoded configuration (copied from Configuration node)\n  // This avoids needing to reference the Configuration node which causes issues with pinned data\n  const config = {\n    features: {\n      includeSummaryStats: true,\n      includeBookingLinks: true,\n      mobileResponsive: true\n    },\n    email: {\n      styles: {\n        primaryColor: '#3498db',\n        secondaryColor: '#2c3e50',\n        successColor: '#27ae60',\n        warningColor: '#f39c12',\n        dangerColor: '#cc0000',\n        lightBg: '#ecf0f1',\n        darkBg: '#34495e'\n      }\n    },\n    api: {\n      baseUrl: 'https://www.nolimitstrackdays.com'\n    }\n  };\n  \n  const styles = config.email.styles;\n  \n  let html = '';\n  \n  // Summary Statistics Section (if enabled)\n  if (config.features.includeSummaryStats && summary) {\n    html += `\n    <div style=\"background: linear-gradient(135deg, ${styles.primaryColor} 0%, ${styles.secondaryColor} 100%); color: #ffffff; padding: 32px 24px; margin-bottom: 24px; border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);\">\n      <h2 style=\"margin: 0 0 20px 0; font-size: 24px; font-family: Arial, sans-serif; font-weight: bold;\">📊 Summary</h2>\n      <div style=\"display: block; width: 100%;\">\n        <div style=\"background: rgba(255,255,255,0.15); padding: 10px 24px; border-radius: 6px; margin-bottom: 8px;\">\n          <div style=\"font-size: 28px; font-weight: bold; margin-bottom: 4px;\">${summary.totalEvents}</div>\n          <div style=\"font-size: 13px; opacity: 0.9;\">Total Events</div>\n        </div>\n        <div style=\"background: rgba(255,255,255,0.15); padding: 10px 24px; border-radius: 6px; margin-bottom: 8px;\">\n          <div style=\"font-size: 28px; font-weight: bold; margin-bottom: 4px;\">${summary.totalTracks}</div>\n          <div style=\"font-size: 13px; opacity: 0.9;\">Tracks</div>\n        </div>\n        <div style=\"background: rgba(255,255,255,0.15); padding: 10px 24px; border-radius: 6px; margin-bottom: 8px;\">\n          <div style=\"font-size: 28px; font-weight: bold; margin-bottom: 4px; color: ${styles.warningColor};\">${summary.limitedSpacesCount}</div>\n          <div style=\"font-size: 13px; opacity: 0.9;\">Limited spaces</div>\n        </div>\n        <div style=\"background: rgba(255,255,255,0.15); padding: 10px 24px; border-radius: 6px;\">\n          <div style=\"font-size: 28px; font-weight: bold; margin-bottom: 4px; color: ${styles.dangerColor};\">${summary.criticalSpacesCount}</div>\n          <div style=\"font-size: 13px; opacity: 0.9;\">Last Spaces</div>\n        </div>\n      </div>\n    </div>\n    `;\n  }\n  \n  // Mobile-responsive CSS\n  const responsiveStyles = config.features.mobileResponsive ? `\n    <style>\n      @media only screen and (max-width: 600px) {\n        .track-table { width: 100% !important; }\n        .track-header { font-size: 18px !important; padding: 14px 16px !important; }\n        .date-row { font-size: 14px !important; padding: 12px 16px !important; }\n        .column-header { font-size: 12px !important; padding: 10px 8px !important; }\n        .data-cell { font-size: 13px !important; padding: 12px 8px !important; }\n        .description-cell { display: block; max-width: 100%; word-wrap: break-word; }\n        .booking-link { display: inline-block; margin-top: 8px; padding: 8px 16px; background: ${styles.primaryColor}; color: #ffffff; text-decoration: none; border-radius: 4px; font-size: 12px; }\n      }\n    </style>\n  ` : '';\n  \n  html = responsiveStyles + html;\n  \n  // Build events table\n  let rows = '';\n  const tracks = Object.entries(eventsData);\n  \n  for (const track of tracks) {\n    const trackName = track[0];\n    const trackDates = Object.keys(track[1]);\n    \n    // Track header with clean border design\n    rows += `\n    <tr>\n      <td colspan=\"6\" class=\"track-header\" style=\"background-color: ${styles.secondaryColor}; color: #ffffff; padding: 18px 24px; font-size: 20px; font-weight: bold; font-family: Arial, sans-serif; text-align: left; border-top: 4px solid ${styles.primaryColor};\">\n        🏁 ${trackName}\n      </td>\n    </tr>`;\n    \n    trackDates.forEach(date => {\n      const dateEvents = track[1][date];\n      \n      // Date row with left accent\n      rows += `\n      <tr>\n        <td colspan=\"6\" class=\"date-row\" style=\"background-color: ${styles.lightBg}; color: ${styles.secondaryColor}; padding: 14px 24px; font-size: 15px; font-weight: bold; font-family: Arial, sans-serif; border-left: 5px solid ${styles.primaryColor};\">\n          📅 ${dateEvents[0].dateFriendly}\n        </td>\n      </tr>`;\n      \n      // Column headers with subtle styling\n      rows += `\n      <tr>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: left;\">Group</td>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: left;\">Price</td>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: center;\">Spaces</td>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: left;\">Description</td>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: center;\">Limited</td>\n        <td class=\"column-header\" style=\"background-color: ${styles.darkBg}; color: #ffffff; padding: 12px 16px; font-weight: bold; font-size: 13px; font-family: Arial, sans-serif; text-align: center;\"></td>\n      </tr>`;\n      \n      // Data rows with alternating backgrounds\n      let rowIndex = 0;\n      dateEvents.forEach(event => {\n        const bgColor = rowIndex % 2 === 0 ? '#ffffff' : '#f8f9fa';\n        let limitedColor = styles.successColor;\n        let limitedText = 'No';\n        \n        if (event.criticalSpaces) {\n          limitedColor = styles.dangerColor;\n          limitedText = '⚠️ Last';\n        } else if (event.limitedSpaces) {\n          limitedColor = styles.warningColor;\n          limitedText = '⚡ Yes';\n        }\n        \n        // Booking link\n        const bookingLinkHtml = config.features.includeBookingLinks\n          ? `<a href=\"${event.bookingUrl}\" class=\"booking-link\" style=\"display: inline-block; padding: 8px 16px; background: ${styles.primaryColor}; color: #ffffff; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: bold;\">Book Now</a>`\n          : '-';\n        \n        // Add booking link to description if enabled\n        const descriptionWithLink = config.features.includeBookingLinks\n          ? `${event.description}`\n          : event.description;\n        \n        rows += `\n        <tr>\n          <td class=\"data-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; color: ${styles.secondaryColor}; font-family: Arial, sans-serif; font-size: 14px; border-bottom: 1px solid #e0e0e0;\">${event.group}</td>\n          <td class=\"data-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; color: #16a085; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; border-bottom: 1px solid #e0e0e0;\">£${event.price}</td>\n          <td class=\"data-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; color: #7f8c8d; font-family: Arial, sans-serif; font-size: 14px; text-align: center; border-bottom: 1px solid #e0e0e0; font-weight: bold;\">${event.spaces}</td>\n          <td class=\"data-cell description-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; color: #34495e; font-family: Arial, sans-serif; font-size: 14px; border-bottom: 1px solid #e0e0e0;\">${descriptionWithLink}</td>\n          <td class=\"data-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; color: ${limitedColor}; font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; text-align: center; border-bottom: 1px solid #e0e0e0;\">${limitedText}</td>\n          <td class=\"data-cell\" style=\"background-color: ${bgColor}; padding: 14px 16px; text-align: center; border-bottom: 1px solid #e0e0e0;\">${bookingLinkHtml}</td>\n        </tr>`;\n        \n        rowIndex++;\n      });\n    });\n    \n    // Spacer between tracks (outside the table)\n    rows += `\n    </table>\n  </div>\n  <div style=\"height: 32px; background-color: transparent;\">&nbsp;</div>\n  <div style=\"overflow-x: auto; -webkit-overflow-scrolling: touch;\">\n    <table class=\"track-table\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"border-collapse: collapse; font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; background-color: #ffffff; border: 1px solid #dcdcdc; box-shadow: 0 2px 8px rgba(0,0,0,0.1);\">`;\n  }\n  \n  // Build complete table with responsive wrapper\n  const tableHtml = `\n  <div style=\"overflow-x: auto; -webkit-overflow-scrolling: touch;\">\n    <table class=\"track-table\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"border-collapse: collapse; font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; background-color: #ffffff; border: 1px solid #dcdcdc; box-shadow: 0 2px 8px rgba(0,0,0,0.1);\">\n      ${rows}\n    </table>\n  </div>`;\n  \n  html += tableHtml;\n  \n  // Add footer\n  html += `\n  <div style=\"text-align: center; padding: 24px; color: #7f8c8d; font-family: Arial, sans-serif; font-size: 12px; margin-top: 24px;\">\n    <p style=\"margin: 0 0 8px 0;\">Generated on ${new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>\n    <p style=\"margin: 0;\">© No Limits Track Days | <a href=\"${config.api.baseUrl}\" style=\"color: ${styles.primaryColor}; text-decoration: none;\">Visit Website</a></p>\n  </div>`;\n  \n  console.log('HTML email generated successfully');\n  \n  return [{ json: { html } }];\n  \n} catch (error) {\n  console.error('Error in Generate HTML Email:', error.message);\n  throw new Error(`HTML generation failed: ${error.message}`);\n}\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1744, -16],
+      "id": "f23d8c2e-a273-4e16-964b-085473499900",
+      "name": "Generate HTML Email"
+    },
+    {
+      "parameters": {
+        "fromEmail": "your-email@example.com",
+        "toEmail": "your-email@example.com",
+        "subject": "=No Limits Track Days Events ({{ new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' }) }})",
+        "html": "=<div style=\"background-color: #f5f5f5; padding: 24px; font-family: Arial, sans-serif;\">\n  <div style=\"max-width: 1200px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.15);\">\n    <div style=\"background: linear-gradient(135deg, #3498db 0%, #2c3e50 100%); color: #ffffff; padding: 32px 24px; text-align: center;\">\n      <h1 style=\"margin: 0; font-size: 32px; font-weight: bold;\">🏁 No Limits Track Day Availability</h1>\n      <p style=\"margin: 12px 0 0 0; font-size: 16px; opacity: 0.9;\">All upcoming UK No Limits Track Days</p>\n    </div>\n    <div style=\"padding: 24px;\">\n      {{ $json.html }}\n    </div>\n  </div>\n</div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1968, -16],
+      "id": "cdeb460f-7d84-4116-80a0-81ffa156b14c",
+      "name": "Send email",
+      "webhookId": "<your_webhook_id>",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5
+    }
+  ],
+  "connections": {
+    "Configuration": {
+      "main": [
+        [
+          {
+            "node": "Define Events API Endpoints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate API Response": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Events Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Events API Endpoints": {
+      "main": [
+        [
+          {
+            "node": "Fetch Events Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Events Data": {
+      "main": [
+        [
+          {
+            "node": "Validate API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Events Data": {
+      "main": [
+        [
+          {
+            "node": "Generate HTML Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Email": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
